@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: unkilbonker
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      # Pin Python 3.12 - the pinned python-telegram-bot version (21.x)
+      # crashes on startup under Render's newer default Python.
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: OWNER_ID
+        sync: false
+      - key: SUDO_IDS
+        sync: false
+      - key: CHANNEL_ID
+        sync: false
+      - key: AI_API_KEY
+        sync: false
+      - key: AI_BASE_URL
+        sync: false
+      - key: AI_MODEL
+        sync: false
+      - key: REWRITE_STYLE
+        sync: false
+      - key: WEBHOOK_URL
+        sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
