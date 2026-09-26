@@ -330,7 +330,13 @@ async def warn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     limit = int(db.get_setting(chat_id, "warn_limit", 3))
     if count >= limit:
         db.reset_warns(chat_id, tid)
-        await apply_warn_mode(update, context, tid, name, limit)
+        try:
+            await update.effective_chat.ban_member(tid)
+            await msg.reply_text(
+                f"⚠️ {name} hit {limit} warns - <b>banned</b>.",
+                parse_mode=ParseMode.HTML)
+        except TelegramError as e:
+            await msg.reply_text(f"Warn limit reached but ban failed: {e}")
     else:
         await msg.reply_text(
             f"⚠️ {name} has <b>{count}/{limit}</b> warns."
@@ -430,114 +436,3 @@ async def unpin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.unpin()
     except TelegramError as e:
         await update.effective_message.reply_text(f"Couldn't unpin: {e}")
-
-
-# ---------------------------------------------------- warn mode handling
-
-async def apply_warn_mode(update, context, tid: int, name: str, limit: int) -> None:
-    """Apply the configured action when a user hits the warn limit."""
-    msg = update.effective_message
-    chat = update.effective_chat
-    mode = db.get_setting(chat.id, "warn_mode", "ban")
-    duration = db.get_setting(chat.id, "warn_mode_time", 86400)
-    try:
-        seconds = int(duration)
-    except (TypeError, ValueError):
-        seconds = 86400
-    base = (f"⚠️ {name} hit {limit} warns")
-    try:
-        if mode == "mute":
-            await chat.restrict_member(tid, MUTED)
-            await msg.reply_text(f"{base} - <b>muted</b>.",
-                                 parse_mode=ParseMode.HTML)
-        elif mode == "kick":
-            await chat.ban_member(tid)
-            await chat.unban_member(tid, only_if_banned=True)
-            await msg.reply_text(f"{base} - <b>kicked</b>.",
-                                 parse_mode=ParseMode.HTML)
-        elif mode == "tban":
-            await chat.ban_member(tid)
-            if context.job_queue:
-                context.job_queue.run_once(
-                    unban_job, seconds,
-                    data={"chat_id": chat.id, "user_id": tid, "name": name})
-            await msg.reply_text(
-                f"{base} - <b>banned for {fmt_duration(seconds)}</b>.",
-                parse_mode=ParseMode.HTML)
-        elif mode == "tmute":
-            await chat.restrict_member(tid, MUTED)
-            if context.job_queue:
-                context.job_queue.run_once(
-                    unmute_job, seconds,
-                    data={"chat_id": chat.id, "user_id": tid})
-            await msg.reply_text(
-                f"{base} - <b>muted for {fmt_duration(seconds)}</b>.",
-                parse_mode=ParseMode.HTML)
-        else:  # ban
-            await chat.ban_member(tid)
-            await msg.reply_text(f"{base} - <b>banned</b>.",
-                                 parse_mode=ParseMode.HTML)
-    except TelegramError as e:
-        await msg.reply_text(f"Warn limit reached but action failed: {e}")
-
-
-async def unwarn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await user_is_admin(update, context):
-        return
-    target = await get_target_user(update)
-    if not target:
-        await update.effective_message.reply_text("Reply to someone or give their ID.")
-        return
-    tid, name = target
-    new_count = db.dec_warn(update.effective_chat.id, tid)
-    if new_count is None:
-        await update.effective_message.reply_text(
-            f"{name} has no warns to remove.")
-    else:
-        await update.effective_message.reply_text(
-            f"♻️ Removed one warn from {name} - now at {new_count}.")
-
-
-async def setwarnlimit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await user_is_admin(update, context):
-        return
-    args = context.args or []
-    chat_id = update.effective_chat.id
-    if not args or not args[0].isdigit():
-        await update.effective_message.reply_text(
-            f"Current warn limit: {db.get_setting(chat_id, 'warn_limit', 3)}\n"
-            "Change it: /setwarnlimit 5")
-        return
-    db.set_setting(chat_id, "warn_limit", int(args[0]))
-    await update.effective_message.reply_text(f"✅ Warn limit set to {args[0]}.")
-
-
-async def setwarnmode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await user_is_admin(update, context):
-        return
-    args = context.args or []
-    chat_id = update.effective_chat.id
-    modes = ("ban", "tban", "mute", "tmute", "kick")
-    if not args or args[0].lower() not in modes:
-        current = db.get_setting(chat_id, "warn_mode", "ban")
-        await update.effective_message.reply_text(
-            f"Current warn mode: <b>{current}</b>\n"
-            "Usage: /setwarnmode <ban/tban/mute/tmute/kick> [time]\n"
-            "Example: /setwarnmode tban 3d",
-            parse_mode=ParseMode.HTML)
-        return
-    mode = args[0].lower()
-    seconds = None
-    if len(args) > 1 and mode in ("tban", "tmute"):
-        seconds = parse_duration(args[1])
-        if not seconds:
-            await update.effective_message.reply_text(
-                "Invalid time - use e.g. 30m, 2h, 3d.")
-            return
-    db.set_setting(chat_id, "warn_mode", mode)
-    if seconds:
-        db.set_setting(chat_id, "warn_mode_time", seconds)
-    await update.effective_message.reply_text(
-        f"✅ Warn mode set to <b>{mode}</b>."
-        + (f" ({fmt_duration(seconds)})" if seconds else ""),
-        parse_mode=ParseMode.HTML)
