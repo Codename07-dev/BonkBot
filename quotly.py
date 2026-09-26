@@ -1,20 +1,18 @@
-"""Quotly-style: reply to any message with /q to get a quote sticker.
+"""Quotly-style: reply to any message with /q to get a quote sticker."""
 
-Design (matches the classic Quotly look):
-  dark rounded card -> circular avatar top-left -> bold name + muted
-  @username -> optional "replying to" block with accent bar -> message text
-  -> optional embedded photo -> small grey timestamp bottom-right.
-"""
-
+import html
 import io
 import logging
 import os
 from datetime import datetime, timezone
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from telegram import Update
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
+
+import db  # noqa: F401  (kept so db init side effects run early)
+from moderation import user_is_admin
 
 log = logging.getLogger("unkilbonker.quotly")
 
@@ -23,23 +21,18 @@ FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 FONT_REG = os.path.join(FONT_DIR, "DejaVuSans.ttf")
 FONT_BOLD = os.path.join(FONT_DIR, "DejaVuSans-Bold.ttf")
 
-CARD_BG_TOP = (18, 20, 26)      # subtle vertical gradient
-CARD_BG_BOTTOM = (30, 33, 42)
-TEXT_MAIN = (238, 240, 243)
-TEXT_MUTED = (124, 131, 141)
-REPLY_ACCENT = (86, 156, 233)   # telegram blue
-NAME_COLORS = [(86, 156, 233), (224, 99, 125), (98, 187, 122),
-               (230, 170, 78), (167, 130, 224)]
+CARD_BG = (24, 28, 38, 255)        # dark navy card
+ACCENT = (88, 101, 242, 255)       # blurple
 
 
-def _font(path: str, size: int):
+def _font(path: str, size: int) -> ImageFont.FreeTypeFont:
     try:
         return ImageFont.truetype(path, size)
     except OSError:
         return ImageFont.load_default()
 
 
-def _wrap(draw, text: str, font, max_width: int) -> list:
+def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> list:
     lines, line = [], ""
     for word in (text or "").split():
         trial = f"{line} {word}".strip()
@@ -53,32 +46,6 @@ def _wrap(draw, text: str, font, max_width: int) -> list:
     return lines or [""]
 
 
-def _circle_avatar(avatar: bytes | None, size: int, name: str,
-                   color: tuple) -> Image.Image:
-    if avatar:
-        try:
-            av = Image.open(io.BytesIO(avatar)).convert("RGB")
-            mask = Image.new("L", av.size, 0)
-            ImageDraw.Draw(mask).ellipse([0, 0, av.width - 1, av.height - 1],
-                                         fill=255)
-            av = av.resize((size, size))
-            out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-            out.paste(av, (0, 0), mask.resize((size, size)))
-            return out
-        except Exception:  # noqa: BLE001
-            pass
-    tile = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    ImageDraw.Draw(tile).ellipse([0, 0, size - 1, size - 1], fill=color)
-    initial = (name or "?").strip()[:1].upper() or "?"
-    f = _font(FONT_BOLD, int(size * 0.42))
-    d = ImageDraw.Draw(tile)
-    w = d.textlength(initial, font=f)
-    bbox = d.textbbox((0, 0), initial, font=f)
-    d.text(((size - w) / 2, (size - (bbox[3] - bbox[1])) / 2 - bbox[1]),
-           initial, font=f, fill=(255, 255, 255))
-    return tile
-
-
 def _rounded_mask(size: tuple, radius: int) -> Image.Image:
     m = Image.new("L", size, 0)
     ImageDraw.Draw(m).rounded_rectangle([0, 0, size[0] - 1, size[1] - 1],
@@ -86,118 +53,108 @@ def _rounded_mask(size: tuple, radius: int) -> Image.Image:
     return m
 
 
-def render_quote(text: str, author: str, handle: str, date_str: str,
+def render_quote(text: str, author: str, date_str: str,
                  avatar: bytes | None = None, media: bytes | None = None,
-                 reply_to: str = None, reply_snippet: str = None) -> bytes:
-    """Render the Quotly-style card, return PNG bytes."""
-    S = 2                       # supersampling
-    W = 880 * S
-    PAD = 54 * S
-    AV = 108 * S
-    GAP = 34 * S
+                 accent: tuple = ACCENT) -> bytes:
+    """Render a Quotly-style quote card and return PNG bytes."""
+    S = 2  # supersample
+    W = 900 * S
+    PAD = 56 * S
+    AVATAR = 120 * S
+    inner = W - PAD * 2 - AVATAR - 40 * S
 
-    scratch = Image.new("RGBA", (8, 8))
+    scratch = Image.new("RGBA", (10, 10))
     d = ImageDraw.Draw(scratch)
-    f_name = _font(FONT_BOLD, 42 * S)
-    f_handle = _font(FONT_REG, 30 * S)
-    f_text = _font(FONT_REG, 42 * S)
-    f_small = _font(FONT_REG, 28 * S)
-    f_date = _font(FONT_REG, 28 * S)
 
-    name_color = NAME_COLORS[sum(author.encode()) % len(NAME_COLORS)]
-    inner = W - PAD * 2
+    name_font = _font(FONT_BOLD, 44 * S)
+    text_font = _font(FONT_REG, 46 * S)
+    date_font = _font(FONT_REG, 30 * S)
 
-    # header block (avatar + name + handle)
-    header_h = max(AV, 74 * S)
+    lines = _wrap(d, text, text_font, inner if not media else inner)
+    line_h = 62 * S
+    text_h = len(lines) * line_h
 
-    # reply block
-    reply_lines = []
-    if reply_to:
-        reply_lines = _wrap(d, (reply_snippet or "")[:80], f_small,
-                            inner - 30 * S)[:2]
-
-    # message text
-    text_lines = _wrap(d, text, f_text, inner)[:24] if text else []
-    line_h = 58 * S
-
-    # media
     media_img = None
     media_h = 0
     if media:
         media_img = Image.open(io.BytesIO(media)).convert("RGB")
-        mw = inner
-        media_img = media_img.resize(
-            (mw, max(1, int(media_img.height * mw / media_img.width))))
-        media_h = media_img.height + 26 * S
+        mw = min(inner, W - PAD * 2)
+        ratio = mw / media_img.width
+        media_img = media_img.resize((mw, int(media_img.height * ratio)))
+        media_h = media_img.height + 30 * S
 
-    reply_h = (len(reply_lines) * 40 * S + 40 * S) if reply_lines else 0
-    body_top = PAD + header_h + 30 * S
-    text_h = len(text_lines) * line_h
-    H = int(body_top + reply_h + text_h + media_h + 74 * S + PAD)
+    H = PAD + max(AVATAR, 60 * S) + 30 * S + text_h + media_h \
+        + 70 * S + PAD  # avatar row + gap + text (+media) + date + bottom
 
-    # card + gradient
     card = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    grad = Image.new("RGB", (1, H))
-    for y in range(H):
-        t = y / max(1, H - 1)
-        grad.putpixel((0, y), tuple(
-            int(a + (b - a) * t)
-            for a, b in zip(CARD_BG_TOP, CARD_BG_BOTTOM)))
-    card.paste(grad.resize((W, H)), (0, 0), _rounded_mask((W, H), 46 * S))
     draw = ImageDraw.Draw(card)
+    draw.rounded_rectangle([0, 0, W - 1, H - 1], 40 * S, fill=CARD_BG)
+    # accent bar
+    draw.rounded_rectangle([0, 0, 14 * S, H - 1], 7 * S, fill=accent)
 
-    # header
-    card.paste(_circle_avatar(avatar, AV, author, name_color), (PAD, PAD))
-    tx = PAD + AV + GAP
-    draw.text((tx, PAD + 4 * S), author[:40], font=f_name,
-              fill=tuple(name_color) + (255,))
-    if handle:
-        draw.text((tx, PAD + 56 * S), f"@{handle}"[:40], font=f_handle,
-                  fill=TEXT_MUTED + (255,))
+    # avatar
+    ax, ay = PAD, PAD + 10 * S
+    if avatar:
+        try:
+            av = Image.open(io.BytesIO(avatar)).convert("RGB")
+            mask = Image.new("L", av.size, 0)
+            ImageDraw.Draw(mask).ellipse([0, 0, av.width - 1, av.height - 1],
+                                         fill=255)
+            av = av.resize((AVATAR, AVATAR)).convert("RGBA")
+            mask = mask.resize((AVATAR, AVATAR))
+            card.paste(av, (ax, ay), mask)
+        except Exception:  # noqa: BLE001 - any avatar issue falls back
+            _draw_initial(draw, ax, ay, AVATAR, author, accent)
+    else:
+        _draw_initial(draw, ax, ay, AVATAR, author, accent)
 
-    # reply block
-    y = body_top
-    if reply_lines:
-        draw.rounded_rectangle(
-            [PAD, y, PAD + 7 * S, y + len(reply_lines) * 40 * S + 24 * S],
-            4 * S, fill=REPLY_ACCENT + (255,))
-        draw.text((PAD + 22 * S, y + 2 * S),
-                  f"↩ {reply_to[:32]}", font=f_small,
-                  fill=TEXT_MUTED + (255,))
-        for i, ln in enumerate(reply_lines):
-            draw.text((PAD + 22 * S, y + 36 * S + i * 40 * S), ln,
-                      font=f_small, fill=TEXT_MUTED + (255,))
-        y += reply_h
+    # author name
+    draw.text((ax + AVATAR + 40 * S, ay + 18 * S), author[:42],
+              font=name_font, fill=(240, 242, 245, 255))
 
     # message text
-    for i, ln in enumerate(text_lines):
-        draw.text((PAD, y + i * line_h), ln, font=f_text,
-                  fill=TEXT_MAIN + (255,))
-    y += text_h
+    ty = PAD + max(AVATAR, 60 * S) + 30 * S
+    for i, line in enumerate(lines[:28]):  # cap absurdly long messages
+        draw.text((ax, ty + i * line_h), line, font=text_font,
+                  fill=(220, 221, 225, 255))
 
-    # media
+    # optional embedded media (photo)
     if media_img is not None:
-        card.paste(media_img, (PAD, y + 12 * S),
-                   _rounded_mask(media_img.size, 22 * S))
+        my = ty + len(lines) * line_h + 20 * S
+        mask = _rounded_mask(media_img.size, 24 * S)
+        card.paste(media_img, (ax, my), mask)
 
-    # timestamp bottom-right
-    dw = draw.textlength(date_str, font=f_date)
-    draw.text((W - PAD - dw, H - PAD - 30 * S), date_str, font=f_date,
-              fill=TEXT_MUTED + (255,))
+    # date, bottom-right
+    dw = draw.textlength(date_str, font=date_font)
+    draw.text((W - PAD - dw, H - PAD - 26 * S), date_str,
+              font=date_font, fill=(140, 145, 153, 255))
 
+    # downscale for crispness
     card = card.resize((W // S, H // S), Image.LANCZOS)
     buf = io.BytesIO()
     card.convert("RGB").save(buf, "PNG")
     return buf.getvalue()
 
 
+def _draw_initial(draw, x, y, size, name, accent):
+    draw.ellipse([x, y, x + size, y + size], fill=accent)
+    initial = (name or "?").strip()[:1].upper() or "?"
+    f = _font(FONT_BOLD, int(size * 0.42))
+    w = draw.textlength(initial, font=f)
+    bbox = draw.textbbox((0, 0), initial, font=f)
+    draw.text((x + (size - w) / 2, y + (size - (bbox[3] - bbox[1])) / 2
+              - bbox[1]), initial, font=f, fill=(255, 255, 255, 255))
+
+
 def to_sticker_bytes(png: bytes) -> bytes:
     """Scale so the longer side is exactly 512px, encode as WEBP."""
     img = Image.open(io.BytesIO(png))
     if img.width >= img.height:
-        nw, nh = 512, max(1, round(img.height * 512 / img.width))
+        nw = 512
+        nh = max(1, round(img.height * 512 / img.width))
     else:
-        nh, nw = 512, max(1, round(img.width * 512 / img.height))
+        nh = 512
+        nw = max(1, round(img.width * 512 / img.height))
     img = img.resize((nw, nh), Image.LANCZOS).convert("RGB")
     buf = io.BytesIO()
     img.save(buf, "WEBP", quality=92)
@@ -217,6 +174,11 @@ async def quotly_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not text and not source.photo:
         await msg.reply_text("I can quote text messages and photos. 🖼")
         return
+
+    # color seed from the user id so everyone gets a consistent accent
+    seeds = [ACCENT, (235, 69, 158, 255), (66, 181, 130, 255),
+             (250, 166, 26, 255), (32, 177, 229, 255)]
+    accent = seeds[user.id % len(seeds)]
 
     try:
         status = await msg.reply_text("🎨 Rendering your quote...")
@@ -238,19 +200,10 @@ async def quotly_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             f = await source.photo[-1].get_file()
             media = bytes(await f.download_as_bytearray())
 
-        # reply context, like the classic Quotly card
-        reply_to = reply_snippet = None
-        r = source.reply_to_message
-        if r and r.from_user:
-            reply_to = r.from_user.first_name or "?"
-            reply_snippet = (r.text or r.caption or "")[:80]
-
         date_str = (source.date or
                     datetime.now(timezone.utc)).strftime("%d.%m.%Y %H:%M")
-        png = render_quote(text, user.first_name or "?",
-                           user.username or "", date_str,
-                           avatar=avatar, media=media,
-                           reply_to=reply_to, reply_snippet=reply_snippet)
+        png = render_quote(text, user.first_name or "?", date_str,
+                           avatar=avatar, media=media, accent=accent)
         webp = to_sticker_bytes(png)
 
         await msg.reply_sticker(sticker=webp)

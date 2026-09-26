@@ -14,7 +14,7 @@ from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 import db
-from moderation import admin_gate, get_target_user, parse_default_emojis, sudo_ids, user_is_admin
+from moderation import get_target_user, parse_default_emojis, sudo_ids, user_is_admin
 
 log = logging.getLogger("unkilbonker.feds")
 
@@ -91,27 +91,16 @@ async def fedinfo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ----------------------------------------------------------------- join
 
 async def joinfed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     if update.effective_chat.type == "private":
         await update.effective_message.reply_text("Run this in the group, not here.")
         return
     args = context.args or []
     if not args:
-        # No ID given: join YOUR OWN fed (you created it with /newfed)
-        owned = [f for f, n, role in db.my_feds(update.effective_user.id)
-                 if role == "owner"]
-        if not owned:
-            await update.effective_message.reply_text(
-                "You don't own a fed yet. Create one first: /newfed <name>")
-            return
-        if len(owned) > 1:
-            await update.effective_message.reply_text(
-                "You own several feds - give the ID: /joinfed <fed_id>")
-            return
-        fed = db.get_fed(owned[0])
-    else:
-        fed = db.get_fed(args[0])
+        await update.effective_message.reply_text("Usage: /joinfed <fed_id>")
+        return
+    fed = db.get_fed(args[0])
     if not fed:
         await update.effective_message.reply_text("No fed with that ID.")
         return
@@ -131,7 +120,7 @@ async def joinfed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def leavefed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     if not db.chat_fed(update.effective_chat.id):
         await update.effective_message.reply_text("This group isn't in a fed.")
@@ -293,15 +282,7 @@ async def fban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text("I won't fed-ban a fed admin.")
         return
     emojis, reason = parse_default_emojis(context.args or [])
-    if not reason and db.get_setting(fed["fed_id"], "fed_reason", "0") == "1":
-        await update.effective_message.reply_text(
-            "This fed requires a reason: /fban <reply> <reason>")
-        return
     db.add_fban(fed["fed_id"], tid, reason, update.effective_user.id)
-    await fedlog(fed, context,
-                 f"🚫 <b>fban</b>: {name} (<code>{tid}</code>) by "
-                 f"{update.effective_user.first_name}"
-                 + (f" - {html.escape(reason)}" if reason else ""))
 
     # also apply in feds subscribed to this one (ban-feed propagation)
     target_chats = list(db.fed_chats_list(fed["fed_id"]))
@@ -347,9 +328,6 @@ async def unfban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not db.remove_fban(fed["fed_id"], tid):
         await update.effective_message.reply_text("That user isn't fed-banned.")
         return
-    await fedlog(fed, context,
-                 f"✅ <b>unfban</b>: {name} (<code>{tid}</code>) by "
-                 f"{update.effective_user.first_name}")
     target_chats = list(db.fed_chats_list(fed["fed_id"]))
     for child_id in db.fed_subscriptions(fed["fed_id"]):
         db.remove_fban(child_id, tid)
@@ -456,12 +434,11 @@ async def _enforce_ban(context, chat, user, announce: str) -> None:
     _last_announced[key] = now
     try:
         await chat.ban_member(user.id)
-        if db.get_setting(chat.id, "quietfed", "0") != "1":
-            try:
-                await context.bot.send_message(chat.id, announce,
-                                               parse_mode=ParseMode.HTML)
-            except TelegramError:
-                pass
+        try:
+            await context.bot.send_message(chat.id, announce,
+                                           parse_mode=ParseMode.HTML)
+        except TelegramError:
+            pass
     except TelegramError as e:
         log.warning("enforce ban failed in %s: %s", chat.id, e)
 
@@ -547,236 +524,3 @@ async def gbanlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         for uid, r in rows[:40])
     await update.effective_message.reply_text(
         f"🔫 <b>Global bans</b> ({len(rows)}):\n{body}", parse_mode=ParseMode.HTML)
-
-
-# ------------------------------------------------------------ fed extras
-
-async def renamefed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    fed = db.chat_fed(update.effective_chat.id) \
-        if update.effective_chat.type != "private" else None
-    if not fed:
-        await update.effective_message.reply_text("Use this in a fed group.")
-        return
-    user = update.effective_user
-    if fed["owner_id"] != user.id and not is_owner(context, user.id):
-        await update.effective_message.reply_text("Only the fed owner can rename it.")
-        return
-    name = " ".join(context.args or []).strip()
-    if not name:
-        await update.effective_message.reply_text("Usage: /renamefed <new name>")
-        return
-    db.rename_fed(fed["fed_id"], name[:64])
-    await update.effective_message.reply_text(
-        f"✅ Fed renamed to <b>{html.escape(name[:64])}</b>.",
-        parse_mode=ParseMode.HTML)
-
-
-async def fedtransfer_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    fed = db.chat_fed(update.effective_chat.id) \
-        if update.effective_chat.type != "private" else None
-    if not fed:
-        await update.effective_message.reply_text("Use this in a fed group.")
-        return
-    user = update.effective_user
-    if fed["owner_id"] != user.id and not is_owner(context, user.id):
-        await update.effective_message.reply_text(
-            "Only the fed owner can transfer it.")
-        return
-    target = await get_target_user(update)
-    if not target:
-        await update.effective_message.reply_text(
-            "Reply to the user who should own the fed.")
-        return
-    db.transfer_fed(fed["fed_id"], target[0])
-    await update.effective_message.reply_text(
-        f"👑 Federation transferred to {target[1]}.")
-
-
-async def myfeds_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    rows = db.my_feds(update.effective_user.id)
-    if not rows:
-        await update.effective_message.reply_text(
-            "You don't own or administer any feds.")
-        return
-    body = "\n".join(
-        f"• <b>{html.escape(n)}</b> (<code>{f}</code>) - {role}"
-        for f, n, role in rows[:30])
-    await update.effective_message.reply_text(
-        f"🌐 <b>Your feds</b>:\n{body}", parse_mode=ParseMode.HTML)
-
-
-async def fedexport_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Export the current fed's ban list as CSV or JSON."""
-    fed = db.chat_fed(update.effective_chat.id) \
-        if update.effective_chat.type != "private" else None
-    if not fed:
-        await update.effective_message.reply_text("Use this in a fed group.")
-        return
-    if not (is_owner(context, update.effective_user.id)
-            or db.is_fed_admin(fed, update.effective_user.id)):
-        await update.effective_message.reply_text("Fed admins only.")
-        return
-    fmt = (context.args or ["csv"])[0].lower()
-    import io as _io
-    rows = db.list_fbans(fed["fed_id"])
-    if fmt == "json":
-        import json as _json
-        payload = _json.dumps(
-            {"fed": fed["name"], "bans": [{"user_id": u, "reason": r}
-                                          for u, r in rows]}, indent=2)
-        fname = f"{fed['fed_id']}_bans.json"
-    else:
-        payload = "user_id,reason\n" + "\n".join(
-            f'{u},"{str(r).replace(chr(34), chr(39))}"' for u, r in rows)
-        fname = f"{fed['fed_id']}_bans.csv"
-    buf = _io.BytesIO(payload.encode())
-    buf.name = fname
-    await update.effective_message.reply_document(
-        document=buf,
-        caption=f"📦 {len(rows)} fed-ban(s) from {fed['name']}. "
-                "Restore with /fedimport (reply to this file).")
-
-
-async def fedimport_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/fedimport <overwrite|keep> - reply to a CSV/JSON backup."""
-    fed = db.chat_fed(update.effective_chat.id) \
-        if update.effective_chat.type != "private" else None
-    if not fed:
-        await update.effective_message.reply_text("Use this in a fed group.")
-        return
-    if not (is_owner(context, update.effective_user.id)
-            or db.is_fed_admin(fed, update.effective_user.id)):
-        await update.effective_message.reply_text("Fed admins only.")
-        return
-    mode = (context.args or ["keep"])[0].lower()
-    if mode not in ("overwrite", "keep"):
-        await update.effective_message.reply_text(
-            "Usage: reply to the backup file with /fedimport <overwrite|keep>")
-        return
-    msg = update.effective_message
-    source = msg.reply_to_message
-    if not source or not source.document:
-        await msg.reply_text("Reply to a backup .csv or .json file.")
-        return
-    try:
-        tg_file = await source.document.get_file()
-        raw = bytes(await tg_file.download_as_bytearray()).decode()
-    except (TelegramError, UnicodeDecodeError) as e:
-        await msg.reply_text(f"Couldn't read that file: {e}")
-        return
-    import json as _json
-    entries = []
-    try:
-        if raw.lstrip().startswith("{"):
-            data = _json.loads(raw)
-            entries = [(b["user_id"], b.get("reason", "")) for b in data["bans"]]
-        else:
-            lines = [l for l in raw.splitlines()[1:] if l.strip()]
-            for line in lines:
-                uid, _, rest = line.partition(",")
-                entries.append((int(uid.strip().strip('"')),
-                                rest.strip().strip('"')))
-    except (ValueError, KeyError, TypeError) as e:
-        await msg.reply_text(f"Invalid backup format: {e}")
-        return
-    if mode == "overwrite":
-        for uid, _r in db.list_fbans(fed["fed_id"]):
-            db.remove_fban(fed["fed_id"], uid)
-    for uid, reason in entries[:500]:
-        db.add_fban(fed["fed_id"], uid, reason, update.effective_user.id)
-    await msg.reply_text(
-        f"✅ Imported {len(entries)} fed-ban(s) into {fed['name']}.")
-
-
-async def setfedlog_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    fed = db.chat_fed(update.effective_chat.id) \
-        if update.effective_chat.type != "private" else None
-    if not fed:
-        await update.effective_message.reply_text("Use this in a fed group.")
-        return
-    if fed["owner_id"] != update.effective_user.id and \
-            not is_owner(context, update.effective_user.id):
-        await update.effective_message.reply_text("Fed owner only.")
-        return
-    db.set_setting(fed["fed_id"], "fed_log", update.effective_chat.id)
-    await update.effective_message.reply_text(
-        "📜 This chat is now the federation log - all fed events will be "
-        "posted here.")
-
-
-async def unsetfedlog_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    fed = db.chat_fed(update.effective_chat.id) \
-        if update.effective_chat.type != "private" else None
-    if not fed:
-        await update.effective_message.reply_text("Use this in a fed group.")
-        return
-    if fed["owner_id"] != update.effective_user.id and \
-            not is_owner(context, update.effective_user.id):
-        await update.effective_message.reply_text("Fed owner only.")
-        return
-    db.set_setting(fed["fed_id"], "fed_log", 0)
-    await update.effective_message.reply_text("📜 Fed log unset.")
-
-
-async def fedlog(fed: dict, context, text: str) -> None:
-    """Send an event to the fed log channel if configured."""
-    chat_id = db.get_setting(fed["fed_id"], "fed_log")
-    if not chat_id:
-        return
-    try:
-        await context.bot.send_message(
-            int(chat_id), f"🌐 <b>{html.escape(fed['name'])}</b>\n{text}",
-            parse_mode=ParseMode.HTML)
-    except (TelegramError, ValueError, TypeError):
-        pass
-
-
-async def fedreason_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    fed = db.chat_fed(update.effective_chat.id) \
-        if update.effective_chat.type != "private" else None
-    if not fed:
-        await update.effective_message.reply_text("Use this in a fed group.")
-        return
-    if fed["owner_id"] != update.effective_user.id and \
-            not is_owner(context, update.effective_user.id):
-        await update.effective_message.reply_text("Fed owner only.")
-        return
-    args = context.args or []
-    if args and args[0].lower() in ("on", "off", "yes", "no"):
-        db.set_setting(fed["fed_id"], "fed_reason",
-                      "1" if args[0].lower() in ("on", "yes") else "0")
-        await update.effective_message.reply_text(
-            f"Fbans now {'require' if args[0].lower() in ('on', 'yes') else 'do not require'} a reason.")
-        return
-    await update.effective_message.reply_text("Usage: /fedreason on|off")
-
-
-async def quietfed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await user_is_admin(update, context):
-        return
-    args = context.args or []
-    chat_id = update.effective_chat.id
-    if args and args[0].lower() in ("on", "off", "yes", "no"):
-        db.set_setting(chat_id, "quietfed",
-                      "1" if args[0].lower() in ("on", "yes") else "0")
-        await update.effective_message.reply_text(
-            f"🤫 Fed-ban join notifications are now {args[0].upper()}.")
-        return
-    cur = db.get_setting(chat_id, "quietfed", "0")
-    await update.effective_message.reply_text(
-        f"🤫 Quiet fed: {'ON' if cur == '1' else 'OFF'}. "
-        "Usage: /quietfed on|off")
-
-
-async def feddemoteme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    args = context.args or []
-    if not args:
-        await update.effective_message.reply_text("Usage: /feddemoteme <fed_id>")
-        return
-    fed = db.get_fed(args[0])
-    if not fed:
-        await update.effective_message.reply_text("No fed with that ID.")
-        return
-    db.fed_remove_admin(fed["fed_id"], update.effective_user.id)
-    await update.effective_message.reply_text(
-        f"🔻 You are no longer an admin of {fed['name']}.")

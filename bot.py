@@ -17,9 +17,7 @@ from telegram.constants import ParseMode
 from telegram.ext import (Application, ApplicationBuilder, CommandHandler,
                           MessageHandler, filters)
 
-import approvals
 import db
-import disabling
 import extras
 import features
 import feds
@@ -42,16 +40,10 @@ log = logging.getLogger("unkilbonker")
 WELCOME = (
     "🦘 <b>UnkilBonker is alive!</b>\n\n"
     "An all-in-one bot:\n"
-    "• 👮 <b>Moderation</b> - /ban /dban /sban /tban /mute /warn /purge ...\n"
-    "• ✅ <b>Approvals</b> - /approve - trusted users skip all limits\n"
-    "• 🔒 <b>Locks, antiflood & blocklists</b> - /lock, /antiflood, /blocklist\n"
-    "• 🛡 <b>Captcha & anti-raid</b> - /captcha, /antiraid 3h\n"
-    "• 🌐 <b>Federations</b> - /newfed, /joinfed, /fban, /fedexport\n"
-    "• 🧹 <b>Clean service & disabling</b> - /cleanservice, /disable\n"
-    "• 📝 <b>Notes, filters & greetings</b> - /save, /filter, /welcome\n"
-    "• 🖼 <b>Quotly quotes</b> - reply with /q\n"
-    "• 🦘 <b>Sticker kang</b> - /kang - and meme text /mmf\n"
-    "• 🏷 <b>Tag all</b> - /tagall, /utagall\n"
+    "• 👮 <b>Moderation</b> - /ban /tban /mute /warn /purge ...\n"
+    "• 📝 <b>Notes & filters</b> - /save, /filter\n"
+    "• 🔒 <b>Locks & antiflood</b> - /lock, /antiflood\n"
+    "• 🦘 <b>Sticker kang</b> - /kang a sticker to make your own pack\n"
     "• 🤖 <b>AI post rewriter</b> (if configured) for channel admins\n\n"
     "Send /help for the full command list."
 )
@@ -59,43 +51,28 @@ WELCOME = (
 HELP = (
     "🦘 <b>UnkilBonker commands</b>\n\n"
     "<b>Moderation</b> (admins):\n"
-    "/ban - /tban 30m - /unban - /kick - /kickme\n"
-    "/dban /sban /stban - ban + delete or silent variants\n"
-    "/dmute /smute /stmute /dkick /skick - same for mute & kick\n"
+    "/ban - /tban 30m - /unban - /kick\n"
     "/mute - /tmute 10m - /unmute\n"
-    "/warn - /unwarn - /warnings - /resetwarns - /setwarnlimit\n"
-    "/setwarnmode <ban/tban/mute/tmute/kick> [time]\n"
+    "/warn - /unwarn - /warnings - /resetwarns\n"
+    "/setwarnlimit - /setwarnmode <ban/tban/mute/tmute/kick> [time]\n"
     "/purge (reply) - /del (reply) - /pin - /unpin\n"
-    "/promote - /fullpromote - /demote - /adminlist - /admincache\n\n"
-    "<b>Approvals</b>:\n"
-    "/approve (reply) - /unapprove - /approved - /unapproveall\n"
-    "/approval - approved users skip locks, blocklists & antiflood\n\n"
+    "/promote - /fullpromote - /demote (reply)\n\n"
     "<b>Anti-spam</b>:\n"
-    "/setflood <n> - /setfloodtimer <n> <dur> - /flood\n"
-    "/floodmode <ban/mute/kick/tban/tmute> [time] - /clearflood\n"
+    "/setflood <n> - /setfloodmode <ban/mute/kick> - /flood\n"
     "/lock <type> - /unlock <type> - /locks - /locktypes\n"
     "/allowlist <domain> - /rmallowlist <domain>\n"
-    "/addblocklist - /rmblocklist - /unblocklistall - /blocklist\n"
-    "/blocklistmode <nothing/ban/mute/kick/tban/tmute/warn>\n"
-    "/blocklistdelete on|off - /setblocklistreason (wildcards ? * **)\n\n"
+    "/addblocklist - /rmblocklist - /blocklist\n"
+    "/blocklistmode <ban/mute/kick/warn/delete> - /blocklistreason\n\n"
     "<b>Captcha & raid</b>:\n"
     "/captcha on|off - /captchamode <button/math/text>\n"
     "/captchatime 2m - /setcaptchatext - /captchafile\n"
-    "/antiraid [3h] - /raidtime - /raidactiontime\n"
-    "/autoantiraid <n|off> - /setraidthreshold <n>\n\n"
-    "<b>Clean & disabling</b>:\n"
-    "/cleanservice <join/leave/pin/title/photo/videochat/other/all>\n"
-    "/keepservice - /nocleanservice - /cleanservicetypes\n"
-    "/disable <cmd> - /enable - /disableable - /disabled\n"
-    "/disabledel on|off - /disableadmin on|off\n\n"
+    "/antiraid on|off - /setraidthreshold <n>\n\n"
     "<b>Federations</b>:\n"
-    "/newfed <name> - /renamefed - /fedtransfer - /delfed\n"
-    "/joinfed - no ID needed, joins YOUR fed - /leavefed - /fedchats\n"
-    "/fban (reply) - /unfban - /fbanlist - /fedstat - /fedreason\n"
-    "/fpromote - /fdemote - /feddemoteme - /fedadmins - /myfeds\n"
-    "/subfed <fed_id> - /unsubfed - /chatfed - /quietfed\n"
-    "/fedexport csv|json - /fedimport (reply)\n"
-    "/setfedlog - /unsetfedlog - fed event log channel\n\n"
+    "/newfed <name> - /fedinfo - /delfed\n"
+    "/joinfed <fed_id> - /leavefed - /fedchats\n"
+    "/fban (reply) - /unfban - /fbanlist - /fedstat\n"
+    "/fpromote - /fdemote - /fedadmins\n"
+    "/fedsubscribe <fed_id> - follow another fed's ban feed\n\n"
     "<b>Global bans</b> (bot owner): /gban - /ungban - /gbanlist\n\n"
     "<b>Group setup</b>:\n"
     "/setwelcome - /welcome on|off - /resetwelcome\n"
@@ -149,10 +126,6 @@ def register(app: Application) -> None:
     admin = ~filters.ChatType.PRIVATE  # most commands need a group context
     C = utilities.connected  # /connect support: group commands work from DM
 
-    # ---- disabled-command enforcement FIRST in group 0 (before commands)
-    app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.COMMAND,
-                                   disabling.enforce_disabled), group=0)
-
     app.add_handler(CommandHandler(["start", "help"], start), 1)
     app.add_handler(CommandHandler("help", help_cmd), 1)
 
@@ -187,14 +160,6 @@ def register(app: Application) -> None:
         ("setwarnmode", moderation.setwarnmode),
         ("purge", moderation.purge), ("del", moderation.del_msg),
         ("pin", moderation.pin), ("unpin", moderation.unpin),
-        # action variants (Rose-style)
-        ("dban", moderation.dban), ("sban", moderation.sban),
-        ("stban", moderation.stban), ("dmute", moderation.dmute),
-        ("smute", moderation.smute), ("stmute", moderation.stmute),
-        ("dkick", moderation.dkick), ("skick", moderation.skick),
-        # admin module extras
-        ("admincache", moderation.admincache_cmd),
-        ("adminerror", moderation.adminerror_cmd),
     ):
         app.add_handler(CommandHandler(cmd, C(fn)))
 
@@ -222,23 +187,12 @@ def register(app: Application) -> None:
         ("antiflood", features.antiflood_cmd),
         ("setflood", features.antiflood_cmd),
         ("flood", features.antiflood_cmd),
-        ("setfloodmode", features.floodmode_cmd),
-        ("floodmode", features.floodmode_cmd),
-        ("setfloodtimer", features.setfloodtimer_cmd),
-        ("clearflood", features.clearflood_cmd),
+        ("setfloodmode", features.setfloodmode_cmd),
         ("addblocklist", features.add_blocklist_cmd),
         ("rmblocklist", features.rmblocklist_cmd),
-        ("unblocklistall", features.unblocklistall_cmd),
         ("blocklist", features.blocklist_cmd),
         ("blocklistmode", features.blocklistmode_cmd),
         ("blocklistreason", features.blocklistreason_cmd),
-        ("setblocklistreason", features.setblocklistreason_cmd),
-        ("resetblocklistreason", features.resetblocklistreason_cmd),
-        ("blocklistdelete", features.blocklistdelete_cmd),
-        ("cleanservice", features.clean_service_cmd),
-        ("keepservice", features.keep_service_cmd),
-        ("nocleanservice", features.keep_service_cmd),
-        ("cleanservicetypes", features.cleanservicetypes_cmd),
         ("setwelcome", features.set_welcome),
         ("goodbye", features.goodbye_toggle),
         ("setgoodbye", features.set_goodbye),
@@ -282,17 +236,7 @@ def register(app: Application) -> None:
         ("fedstat", feds.fedstat), ("gban", feds.gban),
         ("ungban", feds.ungban), ("gbanlist", feds.gbanlist),
         ("fedsubscribe", feds.fedsubscribe),
-        ("subfed", feds.fedsubscribe),
         ("unfedsubscribe", feds.unfedsubscribe),
-        ("unsubfed", feds.unfedsubscribe),
-        ("fedpromote", feds.fpromote), ("feddemote", feds.fdemote),
-        ("renamefed", feds.renamefed_cmd),
-        ("fedtransfer", feds.fedtransfer_cmd),
-        ("myfeds", feds.myfeds_cmd), ("chatfed", feds.fedinfo),
-        ("fedexport", feds.fedexport_cmd), ("fedimport", feds.fedimport_cmd),
-        ("setfedlog", feds.setfedlog_cmd), ("unsetfedlog", feds.unsetfedlog_cmd),
-        ("fedreason", feds.fedreason_cmd), ("quietfed", feds.quietfed_cmd),
-        ("feddemoteme", feds.feddemoteme_cmd),
     ):
         app.add_handler(CommandHandler(cmd, C(fn)))
 
@@ -305,9 +249,6 @@ def register(app: Application) -> None:
         ("captchafile", captcha.captchafile_cmd),
         ("antiraid", captcha.antiraid_cmd),
         ("setraidthreshold", captcha.setraidthreshold_cmd),
-        ("autoantiraid", captcha.autoantiraid_cmd),
-        ("raidtime", captcha.raidtime_cmd),
-        ("raidactiontime", captcha.raidactiontime_cmd),
     ):
         app.add_handler(CommandHandler(cmd, C(fn)))
     captcha.register(app)
@@ -326,45 +267,17 @@ def register(app: Application) -> None:
     for cmd, fn in (
         ("connect", utilities.connect_cmd),
         ("disconnect", utilities.disconnect_cmd),
-        ("reconnect", utilities.reconnect_cmd),
         ("connection", utilities.connection_cmd),
         ("export", utilities.export_cmd),
         ("import", utilities.import_cmd),
     ):
         app.add_handler(CommandHandler(cmd, C(fn)))
 
-    # ---- approvals
-    for cmd, fn in (
-        ("approve", approvals.approve_cmd),
-        ("unapprove", approvals.unapprove_cmd),
-        ("approved", approvals.approved_cmd),
-        ("unapproveall", approvals.unapproveall_cmd),
-        ("approval", approvals.approval_cmd),
-    ):
-        app.add_handler(CommandHandler(cmd, C(fn)))
-
-    # ---- disabling module
-    for cmd, fn in (
-        ("disable", disabling.disable_cmd), ("enable", disabling.enable_cmd),
-        ("disableable", disabling.disableable_cmd),
-        ("disabled", disabling.disabled_cmd),
-        ("disabledel", disabling.disabledel_cmd),
-        ("disableadmin", disabling.disableadmin_cmd),
-    ):
-        app.add_handler(CommandHandler(cmd, C(fn)))
-
-    # ---- clean service enforcement (runs alongside welcome handlers)
-    app.add_handler(MessageHandler(filters.ChatType.GROUPS,
-                                   features.enforce_clean_service), group=1)
-
     # ---- bonk aliases (UnkilBonker flavour)
     for cmd, fn in (
-        ("bonk", moderation.ban),          # /bonk   == /ban
-        ("unbonk", moderation.unban),      # /unbonk == /unban
-        ("fbonk", feds.fban),               # /fbonk  == /fban
-        ("unfbonki", feds.unfban),          # /unfbonki == /unfban
-        ("bonki", moderation.warn),         # /bonki  == /warn
-        ("unbonki", moderation.unwarn),     # /unbonki == /unwarn (one warn)
+        ("bonk", moderation.ban),          # /bonk  == /ban
+        ("fbonk", feds.fban),               # /fbonk == /fban
+        ("bonki", moderation.warn),         # /bonki == /warn
     ):
         app.add_handler(CommandHandler(cmd, C(fn)))
 

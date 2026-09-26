@@ -1,13 +1,4 @@
-"""Sticker kanging - the Stickerkang-style feature set.
-
-Three things make kang fail on real Telegram, all fixed here:
-  1. A pack can only hold ONE format (static/video/animated) - each format
-     gets its own pack name.
-  2. A pack holds max 120 stickers - we roll over to pack_2, pack_3, ...
-  3. 'Sticker set invalid' vs 'already occupied' races on first kang -
-     both are handled with retry paths.
-Errors are always reported to the user verbatim so problems are debuggable.
-"""
+"""Sticker kanging - the Stickerkang-style feature set."""
 
 import logging
 from io import BytesIO
@@ -23,18 +14,10 @@ import db
 log = logging.getLogger("unkilbonker.stickers")
 
 DEFAULT_EMOJI = "🤔"
-MAX_PACKS = 10  # pack, pack_2, ... pack_10
-
-FMT_SUFFIX = {"static": "", "video": "v", "animated": "a"}
 
 
-def pack_name(user_id: int, bot_username: str, fmt: str = "static",
-              index: int = 0) -> str:
-    suffix = FMT_SUFFIX.get(fmt, "")
-    base = f"unkilbonker{suffix}_{user_id}_by_{bot_username}"
-    if index:
-        base += f"_{index}"
-    return base.lower()[:64]
+def pack_name(user_id: int, bot_username: str) -> str:
+    return f"unkilbonker_{user_id}_by_{bot_username}".lower()[:64]
 
 
 async def _photo_png(file_id: str, bot) -> bytes:
@@ -63,41 +46,6 @@ def _sticker_format(sticker) -> str:
     return "static"
 
 
-def _err_text(e: Exception) -> str:
-    return str(e).lower()
-
-
-async def _add_to(bot, user_id: int, name: str, sticker: InputSticker) -> str:
-    """Try adding to a set. Returns 'added' | 'missing' | 'full' | error str."""
-    try:
-        await bot.add_sticker_to_set(user_id, name, sticker)
-        return "added"
-    except BadRequest as e:
-        t = _err_text(e)
-        if "too much" in t or "too many" in t or "full" in t:
-            return "full"
-        if "not found" in t or "invalid" in t:
-            return "missing"
-        return f"error:{e}"
-    except TelegramError as e:
-        return f"error:{e}"
-
-
-async def _create(bot, user_id: int, name: str, title: str,
-                  sticker: InputSticker) -> str:
-    """Create a fresh set. Returns 'added' | 'occupied' | error str."""
-    try:
-        await bot.create_new_sticker_set(
-            user_id=user_id, name=name, title=title, stickers=[sticker])
-        return "added"
-    except BadRequest as e:
-        if "occupied" in _err_text(e):
-            return "occupied"
-        return f"error:{e}"
-    except TelegramError as e:
-        return f"error:{e}"
-
-
 async def kang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/kang [emojis] - reply to a sticker or photo to add it to your pack."""
     msg = update.effective_message
@@ -114,19 +62,17 @@ async def kang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         emojis = [DEFAULT_EMOJI]
 
     # Work out what we're kanging.
-    fmt = "static"
     if source.sticker:
         st = source.sticker
         fmt = _sticker_format(st)
-        if emojis == [DEFAULT_EMOJI]:
-            base_emoji = [c for c in (st.emoji or "") if not c.isascii()]
-            emojis = base_emoji or [DEFAULT_EMOJI]
+        if not emojis or emojis == [DEFAULT_EMOJI]:
+            emojis = list(st.emoji or DEFAULT_EMOJI)
         sticker_input = InputSticker(sticker=st.file_id, emoji_list=emojis,
                                      format=fmt)
     elif source.photo:
         try:
             png = await _photo_png(source.photo[-1].file_id, context.bot)
-        except (TelegramError, Exception) as e:  # noqa: BLE001
+        except TelegramError as e:
             await msg.reply_text(f"Couldn't download that photo: {e}")
             return
         sticker_input = InputSticker(sticker=png, emoji_list=emojis,
@@ -137,84 +83,72 @@ async def kang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "into your own pack. 🦘")
         return
 
-    title = (f"@{user.username} UnkilBonked" if user.username
-             else f"{user.first_name or 'My'}'s pack")
+    name = pack_name(user.id, bot_username)
+    title = f"@{user.username} UnkilBonked" if user.username \
+        else f"{user.first_name}'s pack"
 
-    # Walk through pack indices: existing packs first, then fresh ones.
-    for i in range(MAX_PACKS):
-        name = pack_name(user.id, bot_username, fmt, i)
-        res = await _add_to(context.bot, user.id, name, sticker_input)
-        if res == "added":
-            db.save_pack(user.id, fmt, name, title)
-            await msg.reply_text(
-                f"🦘 <b>Kanged!</b> "
-                f"<code>t.me/addstickers/{name}</code>",
-                parse_mode=ParseMode.HTML)
-            return
-        if res == "missing":
-            # Set doesn't exist - create it, then we're done.
-            res2 = await _create(context.bot, user.id, name, title,
-                                 sticker_input)
-            if res2 == "added":
-                db.save_pack(user.id, fmt, name, title)
+    # Add to the existing pack, or create it on first kang.
+    try:
+        await context.bot.add_sticker_to_set(user.id, name, sticker_input)
+        db.save_pack(user.id, name, title)
+        await msg.reply_text(
+            "🦘 <b>Kanged!</b> Check your pack: "
+            f"<code>t.me/addstickers/{name}</code>",
+            parse_mode=ParseMode.HTML)
+    except BadRequest as e:
+        err = str(e).lower()
+        if "not found" in err or "invalid" in err:
+            try:
+                await context.bot.create_new_sticker_set(
+                    user_id=user.id, name=name, title=title,
+                    stickers=[sticker_input])
+                db.save_pack(user.id, name, title)
                 await msg.reply_text(
-                    f"🦘 <b>New pack created!</b> "
+                    "🦘 <b>New pack created</b> and sticker added: "
                     f"<code>t.me/addstickers/{name}</code>",
                     parse_mode=ParseMode.HTML)
-                return
-            if res2 == "occupied":
-                # Set exists on Telegram but add failed - retry once.
-                res3 = await _add_to(context.bot, user.id, name, sticker_input)
-                if res3 == "added":
-                    db.save_pack(user.id, fmt, name, title)
-                    await msg.reply_text(
-                        f"🦘 <b>Kanged!</b> "
-                        f"<code>t.me/addstickers/{name}</code>",
-                        parse_mode=ParseMode.HTML)
-                    return
-                await msg.reply_text(
-                    f"Couldn't kang to <code>{name}</code>: {res3}\n"
-                    "Tip: open t.me/addstickers/" + name + " and make sure "
-                    "the bot isn't blocked.", parse_mode=ParseMode.HTML)
-                return
-            await msg.reply_text(f"Couldn't create your pack: {res2}")
-            return
-        if res == "full":
-            continue  # next index
-        # any other error - report it verbatim so it's debuggable
-        await msg.reply_text(
-            f"Couldn't kang: {res.split(':', 1)[-1]}\n"
-            f"(pack <code>{name}</code>)", parse_mode=ParseMode.HTML)
-        return
-
-    await msg.reply_text(
-        f"All {MAX_PACKS} of your {'video ' if fmt == 'video' else ''}"
-        "packs are full! Delete one at t.me/addstickers/... "
-        "or use /getsticker to save it as a file.")
+            except BadRequest as e2:
+                if "occupied" in str(e2).lower():
+                    # Pack exists but we don't have it cached - retry adding.
+                    try:
+                        await context.bot.add_sticker_to_set(user.id, name,
+                                                            sticker_input)
+                        db.save_pack(user.id, name, title)
+                        await msg.reply_text(
+                            f"🦘 Kanged! <code>t.me/addstickers/{name}</code>",
+                            parse_mode=ParseMode.HTML)
+                        return
+                    except BadRequest:
+                        pass
+                await msg.reply_text(f"Couldn't kang: {e2}")
+        else:
+            await msg.reply_text(f"Couldn't kang: {e}")
+    except TelegramError as e:
+        await msg.reply_text(f"Couldn't kang: {e}")
 
 
 async def packs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
+    if user.id != update.effective_user.id:  # reply support
+        pass
     target = update.effective_message.reply_to_message.from_user \
         if update.effective_message.reply_to_message else user
-    packs = db.get_packs(target.id)
-    if not packs:
+    pack = db.get_pack(target.id)
+    if not pack:
         await update.effective_message.reply_text(
-            "No pack yet - reply to a sticker with /kang to start one! 🦘")
+            "No pack yet - send me a sticker with /kang to start one! 🦘")
         return
-    lines = []
-    for fmt, name, title in packs:
-        count = "?"
-        try:
-            st_set = await context.bot.get_sticker_set(name)
-            count = len(st_set.stickers)
-        except TelegramError:
-            pass
-        icon = {"static": "🖼", "video": "🎬", "animated": "✨"}.get(fmt, "📦")
-        lines.append(f"{icon} <b>{title}</b> ({fmt}) - {count} stickers\n"
-                     f"t.me/addstickers/{name}")
+    name, title = pack
+    count = "?"
+    try:
+        st_set = await context.bot.get_sticker_set(name)
+        count = len(st_set.stickers)
+    except TelegramError:
+        pass
     await update.effective_message.reply_text(
-        "🦘 <b>Packs:</b>\n\n" + "\n\n".join(lines), parse_mode=ParseMode.HTML)
+        f"📦 <b>{title}</b>\nStickers: {count}\n"
+        f"Link: t.me/addstickers/{name}",
+        parse_mode=ParseMode.HTML)
 
 
 async def getsticker_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

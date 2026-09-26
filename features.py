@@ -15,12 +15,12 @@ from telegram.error import TelegramError
 from telegram.ext import ApplicationHandlerStop, ContextTypes, MessageHandler, filters
 
 import db
-from moderation import admin_gate, user_is_admin
+from moderation import user_is_admin
 
 log = logging.getLogger("unkilbonker.features")
 
 FLOOD_WINDOW = 10  # seconds
-_flood = defaultdict(lambda: defaultdict(deque))  # chat -> user -> (ts, msg_id)
+_flood = defaultdict(lambda: defaultdict(deque))  # chat -> user -> timestamps
 
 def _urls_in(m):
     out = []
@@ -110,7 +110,7 @@ def render_welcome(template: str, user, chat, count: int) -> str:
 
 
 async def set_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     msg = update.effective_message
     template = None
@@ -131,7 +131,7 @@ async def set_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def welcome_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     chat_id = update.effective_chat.id
     args = context.args or []
@@ -147,7 +147,7 @@ async def welcome_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def reset_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     db.set_setting(update.effective_chat.id, "welcome_text", WELCOME_DEFAULT)
     await update.effective_message.reply_text("♻️ Welcome message reset to default.")
@@ -188,7 +188,7 @@ async def greet_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # ------------------------------------------------------------------- notes
 
 async def save_note_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     msg = update.effective_message
     chat_id = update.effective_chat.id
@@ -234,7 +234,7 @@ async def notes_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def clear_note_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     if not context.args:
         await update.effective_message.reply_text("Usage: /clear <name>")
@@ -244,7 +244,7 @@ async def clear_note_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def clearallnotes_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     # require the chat creator, per the Rose spec
     try:
@@ -277,7 +277,7 @@ async def note_hashtag(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 # ----------------------------------------------------------------- filters
 
 async def add_filter_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     msg = update.effective_message
     chat_id = update.effective_chat.id
@@ -300,7 +300,7 @@ async def add_filter_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def stop_filter_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     if not context.args:
         await update.effective_message.reply_text("Usage: /stop <trigger>")
@@ -311,7 +311,7 @@ async def stop_filter_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def stopall_filters_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     for trigger in db.get_filters(update.effective_chat.id):
         db.del_filter(update.effective_chat.id, trigger)
@@ -345,7 +345,7 @@ async def run_filters(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 # ------------------------------------------------------------------- locks
 
 async def lock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     args = context.args or []
     if not args or args[0] not in LOCK_TYPES:
@@ -360,7 +360,7 @@ async def lock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def unlock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     args = context.args or []
     if not args or args[0] not in LOCK_TYPES:
@@ -393,7 +393,7 @@ async def locktypes_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def allowlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     args = context.args or []
     chat_id = update.effective_chat.id
@@ -412,7 +412,7 @@ async def allowlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def rmallowlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     args = context.args or []
     if not args:
@@ -431,8 +431,6 @@ async def enforce_locks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     if await user_is_admin(update, context):
         return
-    if db.is_approved(update.effective_chat.id, update.effective_user.id):
-        return
     locks = db.get_locks(update.effective_chat.id)
     if not locks:
         return
@@ -449,7 +447,7 @@ async def enforce_locks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 # --------------------------------------------------------------- antiflood
 
 async def antiflood_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     args = context.args or []
     chat_id = update.effective_chat.id
@@ -472,7 +470,7 @@ async def antiflood_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def setfloodmode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     args = context.args or []
     chat_id = update.effective_chat.id
@@ -489,70 +487,33 @@ async def setfloodmode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def check_flood(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Antiflood: limit msgs (or count within window), act per flood_mode."""
     msg = update.effective_message
     if msg is None or update.effective_chat.type == "private":
         return
-    chat = update.effective_chat
-    user = update.effective_user
-    if not user:
-        return
-    limit = db.get_setting(chat.id, "antiflood", "0")
+    limit = db.get_setting(update.effective_chat.id, "antiflood", "0")
     if not limit or limit == "0":
         return
     limit = int(limit)
-    if await user_is_admin(update, context):
+    user, chat = update.effective_user, update.effective_chat
+    if not user or await user_is_admin(update, context):
         return
-    if db.is_approved(chat.id, user.id):
-        return
-
-    window = int(db.get_setting(chat.id, "flood_window", "0") or 0)
-    timer_count = db.get_setting(chat.id, "flood_timer_count")
-    if window and timer_count:
-        limit, window = int(timer_count), window
-    else:
-        window = FLOOD_WINDOW
-
     now = time.monotonic()
     stamps = _flood[chat.id][user.id]
-    while stamps and now - stamps[0][0] > window:
+    while stamps and now - stamps[0] > FLOOD_WINDOW:
         stamps.popleft()
-    stamps.append((now, msg.message_id))
+    stamps.append(now)
     if len(stamps) > limit:
-        ids = [m for _, m in stamps]
         _flood[chat.id][user.id].clear()
         mode = db.get_setting(chat.id, "flood_mode", "kick")
-        if db.get_setting(chat.id, "clearflood", "0") == "1":
-            for i in range(0, len(ids), 100):
-                try:
-                    await context.bot.delete_messages(chat.id, ids[i:i + 100])
-                except TelegramError:
-                    pass
         try:
-            from moderation import MUTED, fmt_duration
-            seconds = int(db.get_setting(chat.id, "flood_mode_time", 86400) or 86400)
             if mode == "ban":
                 await chat.ban_member(user.id)
                 action = "banned"
             elif mode == "mute":
+                from moderation import MUTED
                 await chat.restrict_member(user.id, MUTED)
                 action = "muted"
-            elif mode == "tban":
-                await chat.ban_member(user.id)
-                if context.job_queue:
-                    from moderation import unban_job
-                    context.job_queue.run_once(unban_job, seconds,
-                        data={"chat_id": chat.id, "user_id": user.id,
-                              "name": user.first_name or "?"})
-                action = f"banned for {fmt_duration(seconds)}"
-            elif mode == "tmute":
-                await chat.restrict_member(user.id, MUTED)
-                if context.job_queue:
-                    from moderation import unmute_job
-                    context.job_queue.run_once(unmute_job, seconds,
-                        data={"chat_id": chat.id, "user_id": user.id})
-                action = f"muted for {fmt_duration(seconds)}"
-            else:
+            else:  # kick
                 await chat.ban_member(user.id)
                 await chat.unban_member(user.id, only_if_banned=True)
                 action = "kicked"
@@ -649,7 +610,7 @@ async def ping_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ---------------------------------------------------------------- blocklist
 
 async def add_blocklist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     words = " ".join(context.args or []).split(",") if context.args else []
     words = [w.strip() for w in words if w.strip()]
@@ -665,7 +626,7 @@ async def add_blocklist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def rmblocklist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     words = " ".join(context.args or []).split(",") if context.args else []
     removed = sum(1 for w in words if db.del_blocklist(update.effective_chat.id, w.strip()))
@@ -687,7 +648,7 @@ async def blocklist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def blocklistmode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     args = context.args or []
     chat_id = update.effective_chat.id
@@ -705,7 +666,7 @@ async def blocklistmode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def blocklistreason_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     reason = " ".join(context.args or []).strip()
     if not reason:
@@ -727,15 +688,13 @@ async def enforce_blocklist(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     user = update.effective_user
     if not user or await user_is_admin(update, context):
         return
-    if db.is_approved(update.effective_chat.id, user.id):
-        return
     text = (msg.text or msg.caption or "").lower()
     if not text:
         return
     words = db.list_blocklist(update.effective_chat.id)
     if not words:
         return
-    hit = next((w for w in words if _blocklist_match(w, text)), None)
+    hit = next((w for w in words if w in text), None)
     if not hit:
         return
 
@@ -743,13 +702,10 @@ async def enforce_blocklist(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     chat = update.effective_chat
     mode = db.get_setting(chat.id, "blocklist_mode", "warn")
     reason = db.get_setting(chat.id, "blocklist_reason", "Using blocked words")
-    if db.get_setting(chat.id, "blocklistdelete", "1") == "1":
-        try:
-            await msg.delete()
-        except TelegramError:
-            pass
-    if mode == "nothing":
-        return
+    try:
+        await msg.delete()
+    except TelegramError:
+        pass
     try:
         if mode == "ban":
             await chat.ban_member(user.id)
@@ -786,7 +742,7 @@ async def enforce_blocklist(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # ------------------------------------------------------ cleanwelcome & co
 
 async def cleanwelcome_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     args = context.args or []
     chat_id = update.effective_chat.id
@@ -804,7 +760,7 @@ async def cleanwelcome_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def clearcleft_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     args = context.args or []
     chat_id = update.effective_chat.id
@@ -827,7 +783,7 @@ GOODBYE_DEFAULT = "👋 See you around, {mention}!"
 
 
 async def set_goodbye(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     msg = update.effective_message
     template = None
@@ -845,7 +801,7 @@ async def set_goodbye(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def goodbye_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     chat_id = update.effective_chat.id
     args = context.args or []
@@ -861,7 +817,7 @@ async def goodbye_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def reset_goodbye(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     db.set_setting(update.effective_chat.id, "goodbye_text", GOODBYE_DEFAULT)
     await update.effective_message.reply_text("♻️ Goodbye message reset to default.")
@@ -952,7 +908,7 @@ def _is_ad(msg, chat) -> bool:
 
 
 async def adsremover_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
+    if not await user_is_admin(update, context):
         return
     args = context.args or []
     chat_id = update.effective_chat.id
@@ -980,279 +936,9 @@ async def enforce_ads(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user = update.effective_user
     if not user or await user_is_admin(update, context):
         return
-    if db.is_approved(update.effective_chat.id, user.id):
-        return
     if _is_ad(msg, update.effective_chat):
         try:
             await msg.delete()
         except TelegramError:
             pass
         raise ApplicationHandlerStop
-
-
-# ---------------------------------------------------- antiflood upgrades
-
-async def floodmode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/floodmode ban|mute|kick|tban|tmute [time] - Rose-style."""
-    if not await admin_gate(update, context):
-        return
-    args = context.args or []
-    chat_id = update.effective_chat.id
-    modes = ("ban", "mute", "kick", "tban", "tmute")
-    if not args or args[0].lower() not in modes:
-        cur = db.get_setting(chat_id, "flood_mode", "kick")
-        await update.effective_message.reply_text(
-            f"Current flood mode: <b>{cur}</b>\n"
-            "Usage: /floodmode <ban/mute/kick/tban/tmute> [time]\n"
-            "Example: /floodmode tban 3d", parse_mode=ParseMode.HTML)
-        return
-    from moderation import parse_duration
-    mode = args[0].lower()
-    seconds = None
-    if len(args) > 1 and mode in ("tban", "tmute"):
-        seconds = parse_duration(args[1])
-        if not seconds:
-            await update.effective_message.reply_text("Invalid time - e.g. 3d.")
-            return
-    db.set_setting(chat_id, "flood_mode", mode)
-    if seconds:
-        db.set_setting(chat_id, "flood_mode_time", seconds)
-    await update.effective_message.reply_text(
-        f"✅ Flood mode set to <b>{mode}</b>.",
-        parse_mode=ParseMode.HTML)
-
-
-async def setfloodtimer_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/setfloodtimer <count> <duration> - timed antiflood window."""
-    if not await admin_gate(update, context):
-        return
-    args = context.args or []
-    chat_id = update.effective_chat.id
-    if args and args[0].lower() in ("off", "no", "0"):
-        db.set_setting(chat_id, "flood_window", "0")
-        await update.effective_message.reply_text("🌊 Timed antiflood disabled.")
-        return
-    from moderation import parse_duration
-    if len(args) != 2 or not args[0].isdigit() or not parse_duration(args[1]):
-        cur_c = db.get_setting(chat_id, "flood_timer_count", 0)
-        cur_w = db.get_setting(chat_id, "flood_window", 0)
-        await update.effective_message.reply_text(
-            f"Timed antiflood: {cur_c} messages / {cur_w}s\n"
-            "Usage: /setfloodtimer <count> <duration> - e.g. /setfloodtimer 10 30s")
-        return
-    db.set_setting(chat_id, "flood_timer_count", int(args[0]))
-    db.set_setting(chat_id, "flood_window", parse_duration(args[1]))
-    await update.effective_message.reply_text(
-        f"✅ Timed antiflood: {args[0]} messages within {args[1]}.")
-
-
-async def clearflood_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
-        return
-    args = context.args or []
-    chat_id = update.effective_chat.id
-    if args and args[0].lower() in ("on", "off", "yes", "no"):
-        db.set_setting(chat_id, "clearflood",
-                      "1" if args[0].lower() in ("on", "yes") else "0")
-        await update.effective_message.reply_text(
-            f"🧹 Flood message deletion is now {args[0].upper()}.")
-        return
-    cur = db.get_setting(chat_id, "clearflood", "0")
-    await update.effective_message.reply_text(
-        f"🧹 Clearflood: {'ON' if cur == '1' else 'OFF'}. "
-        "Usage: /clearflood on|off")
-
-
-def _blocklist_match(pattern: str, text: str) -> bool:
-    """Rose-style blocklist wildcards: ? one non-space, * many non-space,
-    ** anything (incl spaces). Plain words match as substrings."""
-    import re as _re
-    if any(ch in pattern for ch in ("?", "*", "**")):
-        rx = ""
-        i = 0
-        while i < len(pattern):
-            if pattern.startswith("**", i):
-                rx += ".*"
-                i += 2
-            elif pattern[i] == "*":
-                rx += r"\S*"
-                i += 1
-            elif pattern[i] == "?":
-                rx += r"\S"
-                i += 1
-            else:
-                rx += _re.escape(pattern[i])
-                i += 1
-        try:
-            return bool(_re.search(rx, text, _re.I))
-        except _re.error:
-            return False
-    return pattern in text
-
-
-async def unblocklistall_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
-        return
-    try:
-        me = await update.effective_chat.get_member(update.effective_user.id)
-        if me.status != "creator":
-            await update.effective_message.reply_text(
-                "Only the group creator can wipe the blocklist.")
-            return
-    except TelegramError:
-        pass
-    db.clear_blocklist(update.effective_chat.id)
-    await update.effective_message.reply_text("🗑 All blocklist triggers removed.")
-
-
-async def blocklistdelete_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
-        return
-    args = context.args or []
-    chat_id = update.effective_chat.id
-    if args and args[0].lower() in ("on", "off", "yes", "no"):
-        on = "1" if args[0].lower() in ("on", "yes") else "0"
-        db.set_setting(chat_id, "blocklistdelete", on)
-        await update.effective_message.reply_text(
-            "🚷 Blocklisted messages are now "
-            + ("deleted." if on == "1" else "kept."))
-        return
-    cur = db.get_setting(chat_id, "blocklistdelete", "1")
-    await update.effective_message.reply_text(
-        "🚷 Blocklist delete: " + ("ON" if cur == "1" else "OFF")
-        + ". Usage: /blocklistdelete on|off")
-
-
-async def setblocklistreason_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
-        return
-    reason = " ".join(context.args or []).strip()
-    if not reason:
-        cur = db.get_setting(update.effective_chat.id, "blocklist_reason",
-                              "Using blocked words")
-        await update.effective_message.reply_text(
-            "Current reason: " + cur + "\nUsage: /setblocklistreason <text>")
-        return
-    db.set_setting(update.effective_chat.id, "blocklist_reason", reason)
-    await update.effective_message.reply_text("✅ Blocklist reason set.")
-
-
-async def resetblocklistreason_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
-        return
-    db.set_setting(update.effective_chat.id, "blocklist_reason",
-                   "Using blocked words")
-    await update.effective_message.reply_text("♻️ Blocklist reason reset.")
-
-
-# ------------------------------------------------------------ clean service
-
-SERVICE_TYPES = ("all", "join", "leave", "other", "photo", "pin", "title",
-                 "videochat")
-
-
-def _service_kind(msg) -> str | None:
-    if msg.new_chat_members or msg.group_chat_created or \
-            msg.supergroup_chat_created:
-        return "join"
-    if msg.left_chat_member:
-        return "leave"
-    if msg.pinned_message:
-        return "pin"
-    if msg.new_chat_photo or msg.delete_chat_photo:
-        return "photo"
-    if msg.new_chat_title:
-        return "title"
-    for attr in ("video_chat_started", "video_chat_ended",
-                 "video_chat_participants_invited", "video_chat_scheduled"):
-        if getattr(msg, attr, None):
-            return "videochat"
-    protected = ("text", "caption", "photo", "video", "audio", "voice",
-                 "video_note", "document", "sticker", "animation", "poll",
-                 "contact", "location", "venue", "dice", "game")
-    if not any(getattr(msg, a, None) for a in protected):
-        return "other"
-    return None
-
-
-def _clean_set(chat_id: int) -> set:
-    raw = db.get_setting(chat_id, "cleanservice")
-    return set(raw.split(",")) if raw else set()
-
-
-async def clean_service_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
-        return
-    args = context.args or []
-    chat_id = update.effective_chat.id
-    active = _clean_set(chat_id)
-    if not args:
-        await update.effective_message.reply_text(
-            "🧹 Cleaning: " + (", ".join(sorted(active)) or "(none)")
-            + "\nUsage: /cleanservice <type|all> | /keepservice <type>\nTypes: "
-            + ", ".join(SERVICE_TYPES))
-        return
-    for arg in args:
-        if arg.lower() == "on":
-            active.add("all")
-        elif arg.lower() in ("off", "no"):
-            active.clear()
-        elif arg.lower() in SERVICE_TYPES:
-            if arg.lower() == "all":
-                active = {"all"}
-            else:
-                active.add(arg.lower())
-        else:
-            await update.effective_message.reply_text(
-                "Unknown type: " + arg + "\nTypes: " + ", ".join(SERVICE_TYPES))
-            return
-    db.set_setting(chat_id, "cleanservice", ",".join(sorted(active)))
-    await update.effective_message.reply_text(
-        "🧹 Clean service: " + (", ".join(sorted(active)) or "off"))
-
-
-async def keep_service_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await admin_gate(update, context):
-        return
-    args = context.args or []
-    active = _clean_set(update.effective_chat.id)
-    if not args:
-        await update.effective_message.reply_text("Usage: /keepservice <type|all>")
-        return
-    for arg in args:
-        active.discard(arg.lower())
-    db.set_setting(update.effective_chat.id, "cleanservice",
-                  ",".join(sorted(active)))
-    await update.effective_message.reply_text(
-        "🧹 Now cleaning: " + (", ".join(sorted(active)) or "(none)"))
-
-
-async def cleanservicetypes_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text(
-        "🧹 <b>Service types</b>:\n"
-        "• all - everything below\n"
-        "• join - 'X joined the chat'\n"
-        "• leave - 'X left the chat'\n"
-        "• pin - 'X pinned a message'\n"
-        "• title - chat title changes\n"
-        "• photo - chat photo changes\n"
-        "• videochat - call start/end/schedule\n"
-        "• other - boosts, payments, misc system messages",
-        parse_mode=ParseMode.HTML)
-
-
-async def enforce_clean_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    msg = update.effective_message
-    if msg is None or update.effective_chat.type == "private":
-        return
-    active = _clean_set(update.effective_chat.id)
-    if not active:
-        return
-    kind = _service_kind(msg)
-    if kind is None:
-        return
-    if "all" in active or kind in active:
-        try:
-            await msg.delete()
-        except TelegramError:
-            pass

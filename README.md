@@ -27,15 +27,6 @@ channel-post rewriter.
 | **Remote admin** | `/connect` `/disconnect` `/connection` - manage a group from your DM with the bot |
 | **Backups** | `/export` `/import` - JSON backup/restore of all chat settings (works around Render's ephemeral disk) |
 | **Media notes** | `/save` while replying to any media stores it; `#name` resends the media |
-| **Approvals** | `/approve` `/unapprove` `/approved` `/unapproveall` `/approval` - trusted users skip locks, blocklists and antiflood |
-| **Ban variants** | `/dban` `/sban` `/stban` `/dmute` `/smute` `/stmute` `/dkick` `/skick` - d deletes the offender's message, s deletes your command (silent) |
-| **Antiflood (full)** | `/setflood` `/setfloodtimer <n> <dur>` `/floodmode <ban/mute/kick/tban/tmute> [time]` `/clearflood on\|off` |
-| **Anti-raid (full)** | `/antiraid [time]` `/raidtime` `/raidactiontime` `/autoantiraid` - tempbans joiners, auto-expires |
-| **Blocklist (full)** | wildcards `?` `*` `**`, `/unblocklistall` `/blocklistdelete` `/setblocklistreason` `/resetblocklistreason` |
-| **Clean service** | `/cleanservice <join/leave/pin/title/photo/videochat/other/all>` `/keepservice` `/nocleanservice` `/cleanservicetypes` |
-| **Disabling** | `/disable` `/enable` `/disableable` `/disabled` `/disabledel` `/disableadmin` |
-| **Admin extras** | `/admincache` `/adminerror on\|off` |
-| **Fed extras** | `/renamefed` `/fedtransfer` `/myfeds` `/chatfed` `/subfed` `/unsubfed` `/fedexport` `/fedimport` `/setfedlog` `/unsetfedlog` `/fedreason` `/quietfed` `/feddemoteme` |
 | **Quotly** | `/q` (reply) - renders any message into a beautiful quote sticker with the author's avatar, colored accent and timestamp |
 | **TagAll** | `/tagall` `/all` `/utagall` `/uall` `/utag` - mention every member (chunked, cancellable with `/cancel`); members are learned from chat activity |
 | **MemeFi** | `/mmf Top ; Bottom` or `/mmf -c Center` (reply to a sticker) - classic meme text with auto-wrapping, returns a 512×512 sticker |
@@ -111,7 +102,7 @@ For permanent storage, attach a paid disk or self-host on a VPS.
 
 Note: the `assets/fonts/` folder must be uploaded too - the image renderers use it.
 
-Everything is plain modules: `moderation.py` (bans/mutes/warns), `feds.py` (federations + global bans), `captcha.py` (join gates + anti-raid), `utilities.py` (connect/reconnect/export/import), `approvals.py`, `disabling.py`, `quotly.py` (Quotly-style quote stickers), `tagall.py`, `memefi.py`, `extras.py` (promote/invite/group settings),
+Everything is plain modules: `moderation.py` (bans/mutes/warns), `feds.py` (federations + global bans), `captcha.py` (join gates + anti-raid), `utilities.py` (connect/export/import), `quotly.py` (quote stickers), `tagall.py`, `memefi.py`, `extras.py` (promote/invite/group settings),
 `features.py` (welcome/notes/filters/locks/afk), `stickers.py` (kang),
 `rewriter.py` (AI), `db.py` (SQLite). Add a handler function and register it
 in `bot.py`'s `register()` - that's the whole pattern.
