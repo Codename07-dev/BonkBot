@@ -20,8 +20,22 @@ log = logging.getLogger("unkilbonker.util")
 
 async def connect_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
+    if update.effective_chat.type == "private":
+        args = context.args or []
+        if not args:  # Rose-style: list feds you can connect to
+            cur = db.get_connection(user.id)
+            await update.effective_message.reply_text(
+                ("🔗 Currently connected to chat "
+                 f"<code>{cur}</code>. Use /connect <chat_id> to switch, "
+                 "/disconnect to end." if cur else
+                 "Usage: /connect <chat_id> - or run /connect inside a group "
+                 "first and I'll remember it."))
+            return
     if update.effective_chat.type != "private":
         # remember this chat, then tell the user to switch to DM
+        prev = db.get_connection(user.id)
+        if prev and prev != update.effective_chat.id:
+            db.set_conn_last(user.id, prev)
         db.set_connection(user.id, update.effective_chat.id)
         await update.effective_message.reply_text(
             f"🔗 This chat connected! Now open a private chat with me and use "
@@ -53,6 +67,9 @@ async def connect_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.effective_message.reply_text(
             "I can't check that chat - is the bot in it?")
         return
+    prev = db.get_connection(user.id)
+    if prev and prev != chat_id:
+        db.set_conn_last(user.id, prev)
     db.set_connection(user.id, chat_id)
     await update.effective_message.reply_text(
         f"🔗 Connected to <b>{html.escape(chat.title or str(chat_id))}</b>.\n"
@@ -62,9 +79,26 @@ async def connect_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def disconnect_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if db.del_connection(update.effective_user.id):
-        await update.effective_message.reply_text("🔌 Disconnected.")
+        await update.effective_message.reply_text(
+            "🔌 Disconnected. Use /reconnect to restore it.")
     else:
         await update.effective_message.reply_text("You weren't connected.")
+
+
+async def reconnect_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    last = db.get_conn_last(update.effective_user.id)
+    if not last:
+        await update.effective_message.reply_text(
+            "No previous connection to restore.")
+        return
+    try:
+        chat = await context.bot.get_chat(last)
+        title = html.escape(chat.title or str(last))
+    except TelegramError:
+        title = str(last)
+    db.set_connection(update.effective_user.id, last)
+    await update.effective_message.reply_text(
+        f"🔗 Reconnected to <b>{title}</b>.", parse_mode=ParseMode.HTML)
 
 
 async def connection_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -58,6 +58,18 @@ async def is_admin(context, chat_id: int, user_id: int) -> bool:
     return user_id in admins
 
 
+async def admin_gate(update: Update, context) -> bool:
+    """Check admin; reply 'Admins only.' unless /adminerror is off."""
+    if await user_is_admin(update, context):
+        return True
+    if db.get_setting(update.effective_chat.id, "adminerror", "1") == "1":
+        try:
+            await update.effective_message.reply_text("Admins only.")
+        except TelegramError:
+            pass
+    return False
+
+
 async def user_is_admin(update: Update, context) -> bool:
     user, chat = update.effective_user, update.effective_chat
     if not user or not chat:
@@ -122,7 +134,7 @@ def parse_default_emojis(args: list) -> tuple:
 
 async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     if not await check_bot_can_restrict(update, context):
         return
@@ -145,7 +157,7 @@ async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def tban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     if not await check_bot_can_restrict(update, context):
         return
@@ -186,7 +198,7 @@ async def unban_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def unban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     target = await get_target_user(update)
     if not target:
@@ -201,7 +213,7 @@ async def unban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     if not await check_bot_can_restrict(update, context):
         return
@@ -222,7 +234,7 @@ async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     if not await check_bot_can_restrict(update, context):
         return
@@ -242,7 +254,7 @@ async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def tmute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     if not await check_bot_can_restrict(update, context):
         return
@@ -283,7 +295,7 @@ async def unmute_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def unmute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     target = await get_target_user(update)
     if not target:
@@ -315,7 +327,7 @@ async def kickme(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def warn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     target = await get_target_user(update)
     if not target:
@@ -350,7 +362,7 @@ async def warnings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def resetwarns(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     target = await get_target_user(update)
     if not target:
@@ -361,7 +373,7 @@ async def resetwarns(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def warnlimit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     args = context.args or []
     if not args or not args[0].isdigit():
@@ -377,7 +389,7 @@ async def warnlimit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def purge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     if not msg.reply_to_message:
         await msg.reply_text("Reply to the message where the purge should start.")
@@ -398,7 +410,7 @@ async def purge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def del_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     reply = msg.reply_to_message
     if not reply:
@@ -413,7 +425,7 @@ async def del_msg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def pin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     reply = msg.reply_to_message or msg
     silent = "loud" not in (context.args or [])
@@ -424,7 +436,7 @@ async def pin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def unpin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     try:
         await update.effective_message.unpin()
@@ -482,7 +494,7 @@ async def apply_warn_mode(update, context, tid: int, name: str, limit: int) -> N
 
 
 async def unwarn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     target = await get_target_user(update)
     if not target:
@@ -499,7 +511,7 @@ async def unwarn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def setwarnlimit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     args = context.args or []
     chat_id = update.effective_chat.id
@@ -513,7 +525,7 @@ async def setwarnlimit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def setwarnmode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     args = context.args or []
     chat_id = update.effective_chat.id
@@ -541,3 +553,120 @@ async def setwarnmode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         f"✅ Warn mode set to <b>{mode}</b>."
         + (f" ({fmt_duration(seconds)})" if seconds else ""),
         parse_mode=ParseMode.HTML)
+
+
+async def admincache_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await admin_gate(update, context):
+        return
+    for key in [k for k in context.bot_data if str(k).startswith("admins:")]:
+        context.bot_data.pop(key)
+    await update.effective_message.reply_text("🔄 Admin cache refreshed.")
+
+
+async def adminerror_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await admin_gate(update, context):
+        return
+    args = context.args or []
+    chat_id = update.effective_chat.id
+    if args and args[0].lower() in ("on", "off", "yes", "no"):
+        db.set_setting(chat_id, "adminerror",
+                      "1" if args[0].lower() in ("on", "yes") else "0")
+        await update.effective_message.reply_text(
+            f"Error messages for non-admins are now {args[0].upper()}.")
+        return
+    cur = db.get_setting(chat_id, "adminerror", "1")
+    await update.effective_message.reply_text(
+        f"Admin error messages: {'ON' if cur == '1' else 'OFF'}. "
+        "Usage: /adminerror on|off")
+
+
+# ------------------------------------------------------- action variants
+
+async def _punish(update, context, kind: str, seconds=None,
+                  delete_target=False, silent=False):
+    """Shared implementation for ban/mute/kick and their d/s variants.
+
+    kind: 'ban' | 'mute' | 'kick'
+    delete_target: also delete the replied-to (offender) message
+    silent: also delete the admin's command message
+    """
+    msg = update.effective_message
+    if not await admin_gate(update, context):
+        return
+    if not await check_bot_can_restrict(update, context):
+        return
+    target = await get_target_user(update)
+    if not target:
+        await msg.reply_text("Reply to someone or give their ID.")
+        return
+    tid, name = target
+    if not await protect_target(update, context, tid):
+        return
+    emojis, reason = parse_default_emojis(context.args or [])
+    chat = update.effective_chat
+    try:
+        if kind == "ban":
+            await chat.ban_member(tid)
+            verb = "banned"
+        elif kind == "mute":
+            await chat.restrict_member(tid, MUTED)
+            verb = "muted"
+        else:
+            await chat.ban_member(tid)
+            await chat.unban_member(tid, only_if_banned=True)
+            verb = "kicked"
+    except TelegramError as e:
+        await msg.reply_text(f"Couldn't do that: {e}")
+        return
+
+    if delete_target and msg.reply_to_message:
+        try:
+            await msg.reply_to_message.delete()
+        except TelegramError:
+            pass
+    if silent:
+        try:
+            await msg.delete()
+        except TelegramError:
+            pass
+        return
+    suffix = f" for <b>{fmt_duration(seconds)}</b>" if seconds else ""
+    await msg.reply_text(
+        f"{verb[0].upper()}{''.join(verb[1:])} <b>{name}</b>{suffix}."
+        + (f"\nReason: {reason}" if reason else ""),
+        parse_mode=ParseMode.HTML)
+
+
+async def dban(update, context):     await _punish(update, context, "ban", delete_target=True)
+async def sban(update, context):     await _punish(update, context, "ban", silent=True)
+async def dmute(update, context):   await _punish(update, context, "mute", delete_target=True)
+async def smute(update, context):   await _punish(update, context, "mute", silent=True)
+async def dkick(update, context):   await _punish(update, context, "kick", delete_target=True)
+async def skick(update, context):   await _punish(update, context, "kick", silent=True)
+
+
+async def stban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    args = context.args or []
+    seconds = parse_duration(args[0]) if args else None
+    msg = update.effective_message
+    if not seconds:
+        await msg.reply_text("Usage: /stban <time> - e.g. /stban 2h")
+        return
+    ctx_args = args[1:]
+    context.args = ctx_args
+    await _punish(update, context, "ban", seconds=seconds, silent=True)
+
+
+async def stmute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    args = context.args or []
+    seconds = parse_duration(args[0]) if args else None
+    msg = update.effective_message
+    if not seconds:
+        await msg.reply_text("Usage: /stmute <time> - e.g. /stmute 30m")
+        return
+    context.args = args[1:]
+    await _punish(update, context, "mute", seconds=seconds, silent=True)
+    if context.job_queue:
+        context.job_queue.run_once(
+            unmute_job, seconds, data={"chat_id": update.effective_chat.id,
+                                        "user_id": (await get_target_user(update) or (0,))[0]})

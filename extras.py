@@ -9,7 +9,7 @@ from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 import db
-from moderation import get_target_user, user_is_admin
+from moderation import admin_gate, get_target_user, user_is_admin
 
 log = logging.getLogger("unkilbonker.extras")
 
@@ -33,7 +33,7 @@ async def fullpromote(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def _promote(update, context, perms: dict, label: str) -> None:
     msg = update.effective_message
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     target = await get_target_user(update)
     if not target:
@@ -51,7 +51,7 @@ async def _promote(update, context, perms: dict, label: str) -> None:
 
 async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     target = await get_target_user(update)
     if not target:
@@ -68,7 +68,7 @@ async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ------------------------------------------------------------ invite
 
 async def invite(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     try:
         link = await update.effective_chat.create_invite_link()
@@ -94,7 +94,7 @@ async def users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def set_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     title = " ".join(context.args or []).strip()
     if not title:
@@ -108,7 +108,7 @@ async def set_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def set_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     desc = " ".join(context.args or []).strip()
     if not desc:
@@ -122,7 +122,7 @@ async def set_desc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def set_gpic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     source = update.effective_message.reply_to_message or update.effective_message
     photo = source.photo[-1] if source.photo else None
@@ -176,7 +176,7 @@ async def report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def reports_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await user_is_admin(update, context):
+    if not await admin_gate(update, context):
         return
     args = context.args or []
     if args and args[0].lower() in ("on", "off"):

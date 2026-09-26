@@ -37,6 +37,9 @@ def init_db() -> None:
                 user_id INTEGER PRIMARY KEY, reason TEXT, since REAL);
             CREATE TABLE IF NOT EXISTS packs (
                 user_id INTEGER PRIMARY KEY, name TEXT, title TEXT);
+            CREATE TABLE IF NOT EXISTS packs2 (
+                user_id INTEGER, fmt TEXT, name TEXT, title TEXT,
+                PRIMARY KEY (user_id, fmt));
             CREATE TABLE IF NOT EXISTS feds (
                 fed_id TEXT PRIMARY KEY, owner_id INTEGER, name TEXT);
             CREATE TABLE IF NOT EXISTS fed_admins (
@@ -65,6 +68,11 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS chat_members (
                 chat_id INTEGER, user_id INTEGER, name TEXT, username TEXT,
                 PRIMARY KEY (chat_id, user_id));
+            CREATE TABLE IF NOT EXISTS approved (
+                chat_id INTEGER, user_id INTEGER, name TEXT,
+                PRIMARY KEY (chat_id, user_id));
+            CREATE TABLE IF NOT EXISTS conn_last (
+                user_id INTEGER PRIMARY KEY, chat_id INTEGER);
             """
         )
 
@@ -216,19 +224,32 @@ def clear_afk(user_id: int) -> bool:
 
 # ---------------------------------------------------------------- packs
 
-def save_pack(user_id: int, name: str, title: str) -> None:
+def save_pack(user_id: int, fmt: str, name: str, title: str) -> None:
     with _lock, _connect() as conn:
         conn.execute(
-            "INSERT INTO packs VALUES (?,?,?) "
-            "ON CONFLICT(user_id) DO UPDATE SET name=excluded.name,"
+            "INSERT INTO packs2 VALUES (?,?,?,?) "
+            "ON CONFLICT(user_id, fmt) DO UPDATE SET name=excluded.name,"
             " title=excluded.title",
-            (user_id, name, title))
+            (user_id, fmt, name, title))
+        conn.execute("INSERT INTO packs VALUES (?,?,?) ON CONFLICT(user_id) "
+                    "DO UPDATE SET name=excluded.name, title=excluded.title",
+                    (user_id, name, title))
 
 
-def get_pack(user_id: int):
+def get_packs(user_id: int) -> list:
+    """[(fmt, name, title)] for every pack style the user owns."""
     with _lock, _connect() as conn:
-        row = conn.execute("SELECT name, title FROM packs WHERE user_id=?",
-                           (user_id,)).fetchone()
+        rows = conn.execute(
+            "SELECT fmt, name, title FROM packs2 WHERE user_id=?",
+            (user_id,)).fetchall()
+    return rows
+
+
+def get_pack(user_id: int, fmt: str = "static"):
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT name, title FROM packs2 WHERE user_id=? AND fmt=?",
+            (user_id, fmt)).fetchone()
     return (row[0], row[1]) if row else None
 
 
@@ -569,3 +590,82 @@ def get_members(chat_id: int) -> list:
             "SELECT user_id, name, username FROM chat_members WHERE chat_id=?",
             (chat_id,)).fetchall()
     return rows
+
+
+# ---------------------------------------------------------------- approvals
+
+def approve(chat_id: int, user_id: int, name: str) -> None:
+    with _lock, _connect() as conn:
+        conn.execute("INSERT OR REPLACE INTO approved VALUES (?,?,?)",
+                     (chat_id, user_id, name))
+
+
+def unapprove(chat_id: int, user_id: int) -> bool:
+    with _lock, _connect() as conn:
+        cur = conn.execute("DELETE FROM approved WHERE chat_id=? AND user_id=?",
+                           (chat_id, user_id))
+    return cur.rowcount > 0
+
+
+def unapprove_all(chat_id: int) -> int:
+    with _lock, _connect() as conn:
+        cur = conn.execute("DELETE FROM approved WHERE chat_id=?", (chat_id,))
+    return cur.rowcount
+
+
+def is_approved(chat_id: int, user_id: int) -> bool:
+    with _lock, _connect() as conn:
+        return conn.execute(
+            "SELECT 1 FROM approved WHERE chat_id=? AND user_id=?",
+            (chat_id, user_id)).fetchone() is not None
+
+
+def approved_list(chat_id: int) -> list:
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            "SELECT user_id, name FROM approved WHERE chat_id=?",
+            (chat_id,)).fetchall()
+    return rows
+
+
+# ------------------------------------------------------- fed extras
+
+def rename_fed(fed_id: str, name: str) -> None:
+    with _lock, _connect() as conn:
+        conn.execute("UPDATE feds SET name=? WHERE fed_id=?", (name, fed_id))
+
+
+def transfer_fed(fed_id: str, new_owner: int) -> None:
+    with _lock, _connect() as conn:
+        conn.execute("UPDATE feds SET owner_id=? WHERE fed_id=?",
+                     (new_owner, fed_id))
+
+
+def my_feds(user_id: int) -> list:
+    """Feds the user owns or administers: [(fed_id, name, role)]."""
+    with _lock, _connect() as conn:
+        owned = conn.execute(
+            "SELECT fed_id, name FROM feds WHERE owner_id=?",
+            (user_id,)).fetchall()
+        admin_of = conn.execute(
+            "SELECT f.fed_id, f.name FROM fed_admins a JOIN feds f "
+            "ON f.fed_id = a.fed_id WHERE a.user_id=?", (user_id,)).fetchall()
+    return ([(f, n, "owner") for f, n in owned]
+            + [(f, n, "admin") for f, n in admin_of])
+
+
+# ------------------------------------------------------- connections
+
+def set_conn_last(user_id: int, chat_id: int) -> None:
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO conn_last VALUES (?,?) "
+            "ON CONFLICT(user_id) DO UPDATE SET chat_id=excluded.chat_id",
+            (user_id, chat_id))
+
+
+def get_conn_last(user_id: int):
+    with _lock, _connect() as conn:
+        row = conn.execute("SELECT chat_id FROM conn_last WHERE user_id=?",
+                           (user_id,)).fetchone()
+    return row[0] if row else None

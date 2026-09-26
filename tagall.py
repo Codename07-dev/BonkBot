@@ -24,19 +24,29 @@ _cancel_key = "tagall_cancel"
 
 # ----------------------------------------------------------- tracking
 
-async def track_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Remember everyone who speaks, so /tagall can reach them."""
-    msg = update.effective_message
-    user = update.effective_user
-    if not msg or not user:
-        return
-    name = (user.first_name or "")[:64]
-    username = (user.username or "")[:64]
-    prev = _seen.get((msg.chat.id, user.id))
+def _remember(chat_id: int, user) -> None:
+    name = (getattr(user, "first_name", None) or "")[:64]
+    username = (getattr(user, "username", None) or "")[:64]
+    prev = _seen.get((chat_id, user.id))
     if prev == (name, username):
         return
-    _seen[(msg.chat.id, user.id)] = (name, username)
-    db.upsert_member(msg.chat.id, user.id, name, username)
+    _seen[(chat_id, user.id)] = (name, username)
+    db.upsert_member(chat_id, user.id, name, username)
+
+
+async def track_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Remember everyone who speaks OR joins, so /tagall can reach them."""
+    msg = update.effective_message
+    if not msg:
+        return
+    # people joining (service message 'X joined the chat')
+    for member in (msg.new_chat_members or []):
+        if member and member.id:
+            _remember(msg.chat.id, member)
+    user = update.effective_user
+    if not user:
+        return
+    _remember(msg.chat.id, user)
 
 
 # ----------------------------------------------------------- commands
@@ -51,9 +61,21 @@ async def _tag_all(update: Update, context: ContextTypes.DEFAULT_TYPE,
     members = [(uid, name, uname) for uid, name, uname in db.get_members(chat.id)
                if uid != context.bot.id]
     if not members:
+        # fall back to the chat administrators so /tagall always works
+        try:
+            admins = await chat.get_administrators()
+            for m in admins:
+                if m.user.id != context.bot.id and not m.user.is_bot:
+                    _remember(chat.id, m.user)
+            members = [(uid, name, uname)
+                       for uid, name, uname in db.get_members(chat.id)
+                       if uid != context.bot.id]
+        except TelegramError:
+            pass
+    if not members:
         await msg.reply_text(
-            "I haven't seen any members yet - people need to talk first, "
-            "or add me as admin so I can see them.")
+            "I don't know any members here yet - people need to talk, "
+            "or join, after which I can tag them.")
         return
 
     context.bot_data[f"{_cancel_key}:{chat.id}"] = False
